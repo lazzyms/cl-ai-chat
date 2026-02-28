@@ -1,5 +1,6 @@
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import BaseMessage, SystemMessage
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import END
 
@@ -36,3 +37,20 @@ def should_continue(state: AgentState):
         return "tools"
 
     return END
+
+
+async def summarize_history(messages: list[BaseMessage]) -> str:
+    """Summarize older conversation messages to compress long histories."""
+    summarize_prompt = [
+        SystemMessage(
+            content=(
+                "You are a conversation summarizer. "
+                "Summarize the following conversation history concisely, "
+                "preserving key facts, decisions, and context the user may reference later. "
+                "Output only the summary, no preamble."
+            )
+        ),
+        *messages,
+    ]
+    response = await llm.ainvoke(summarize_prompt)
+    return response.content

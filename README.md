@@ -5,12 +5,16 @@ Simple local chat framework that composes small agents, prompts and tools to run
 ### What it does
 
 - Provides a lightweight structure for building chat workflows using modular agents (`agents/`), prompt templates (`prompts/`) and helper tools (`tools/`).
+- Interactive CLI with colored output, a live thinking spinner, and real-time token streaming.
+- Maintains conversation history within a session using LangGraph's `add_messages` reducer — no history is persisted between sessions.
+- Automatically compresses long conversations using an LLM-based summarization technique (triggered after 20 messages, keeping the 6 most recent verbatim).
 - Intended for local experimentation with Ollama-compatible LLMs and Python-based orchestration.
 
 ### Prerequisites
 
 - Python 3.10+
 - Ollama installed and a local Ollama model available (an Ollama-compatible chat model). Make sure your chosen model is pulled/installed in Ollama.
+- A [Serper](https://serper.dev) API key for the Google search tool (set `SERPER_API_KEY` in a `.env` file).
 - I prefer `uv` as the package manager
 
 ### Quick setup
@@ -28,7 +32,13 @@ source .venv/bin/activate
 uv sync
 ```
 
-3. Ensure Ollama is running and your model is available. Example (replace <model> with your model name):
+3. Add your Serper API key to a `.env` file in the project root:
+
+```bash
+SERPER_API_KEY=your_key_here
+```
+
+4. Ensure Ollama is running and your model is available. Example (replace `<model>` with your model name):
 
 ```bash
 # pull an Ollama model (example)
@@ -36,33 +46,47 @@ ollama pull <model>
 # ensure Ollama service/daemon is running and reachable
 ```
 
-Note: I have hardcoded "qwen3:latest" in `agents/agent.py`
+Note: `qwen3:latest` is hardcoded in `agents/agent.py` — change `model=` there to use a different model.
 
-How to run
-
-- Run the main script directly:
+### How to run
 
 ```bash
 uv run main.py
 ```
 
-Project layout
+Type `exit`, `quit`, or `bye` to end the session.
 
-- `main.py` — entrypoint / runner
-- `agents/` — agent implementations and orchestration (`agent.py`, `workflow.py`, `state.py`)
-- `prompts/` — prompt templates and prompt-related helpers
-- `tools/` — small utility tools used by agents (e.g., `search_tool.py`)
+### CLI output colours
 
-Usage notes
+| Color           | Meaning                                      |
+| --------------- | -------------------------------------------- |
+| Cyan (bright)   | Your input prompt                            |
+| Green           | AI response tokens                           |
+| Magenta (dim)   | Model thinking / `<think>` blocks            |
+| Yellow (bright) | Spinner while searching (shows query)        |
+| Yellow (dim)    | Tool result preview                          |
+| Blue (dim)      | System notices (summarization, session info) |
+| Red             | Errors                                       |
 
-- This project is intentionally minimal: adapt the agent implementations and prompt templates for your use-case and swap the Ollama model as required.
-- If you modify or add external dependencies, update the dependency manifest (`pyproject.toml` or `requirements.txt`).
+### Project layout
 
-Future plans
+- `main.py` — entrypoint, REPL loop, streaming display, spinner, summarization logic
+- `agents/` — agent node (`agent.py`), LangGraph workflow (`workflow.py`), state schema (`state.py`)
+- `prompts/` — system prompt template
+- `tools/` — helper tools used by agents (`search_tool.py` — Google search via Serper)
 
-- Add an interactive and continuous cli with streaming responses and behind the scene logs
-- Add more tools and deepagents.
+### Usage notes
 
-Contributing
+- Conversation history is session-scoped only — restarting the process starts a fresh session.
+- To tune the summarization behaviour, adjust `SUMMARY_THRESHOLD` and `KEEP_RECENT` at the top of `main.py`.
+- If you modify or add external dependencies, update `pyproject.toml` and run `uv sync`.
 
-- Feel free to open issues or send PRs with improvements, examples, or bug fixes.
+### Future plans
+
+- Documents in context (vector store, pg-vector) - [Using this project](https://github.com/lazzyms/pdf-markdown-embed)
+- Store conversation. Go back to older conversation.
+- Settings: Personalized behavior, Learn from the conversations.
+
+### Contributing
+
+Feel free to open issues or send PRs with improvements, examples, or bug fixes.
