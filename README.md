@@ -86,6 +86,7 @@ Type `exit`, `quit`, or `bye` to end the session.
 - Documents in context (vector store, pg-vector) - [Using this project](https://github.com/lazzyms/pdf-markdown-embed)
 - Store conversation. Go back to older conversation.
 - Settings: Personalized behavior, Learn from the conversations.
+- Try out PageIndex RAGLess retrieval.
 
 ### Contributing
 
