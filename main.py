@@ -4,7 +4,8 @@ from colorama import init, Fore, Style
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from agents.workflow import agent
-from agents.agent import summarize_history
+from agents.supervisor import summarize_history
+from cli.session import get_file_ids
 
 # ── Color scheme ─────────────────────────────────────────────────────────────
 USER_COLOR = Fore.CYAN + Style.BRIGHT
@@ -125,7 +126,7 @@ class _ThinkParser:
 
 
 # ── Single turn execution ─────────────────────────────────────────────────────
-async def run_turn(history: list, user_input: str) -> list:
+async def run_turn(history: list, user_input: str, file_id: str | None = None) -> list:
     """
     Stream one conversation turn.
     Returns the extended history list (original + HumanMessage + all
@@ -142,11 +143,30 @@ async def run_turn(history: list, user_input: str) -> list:
     ai_printing = False  # True once we have started printing AI content
     parser = _ThinkParser()
 
+    # Agent nodes that produce streaming LLM tokens
+    _LLM_NODES = {"search", "retriever", "general"}
+    # Tool executor nodes
+    _TOOL_NODES = {"search_tool", "retriever_tool"}
+
     try:
-        async for chunk, metadata in agent.astream(
-            {"messages": new_history},
-            stream_mode="messages",
+        async for mode, data in agent.astream(
+            {"messages": new_history, "file_id": file_id},
+            stream_mode=["messages", "updates"],
         ):
+            # ── Supervisor decision → update spinner label ─────────────────────
+            if mode == "updates":
+                if "supervisor" in data:
+                    route = data["supervisor"].get("route", "")
+                    if route == "search":
+                        await spinner.swap("Searching…")
+                    elif route == "retriever":
+                        await spinner.swap("Fetching document…")
+                    elif route == "general":
+                        await spinner.swap("Processing…")
+                continue
+
+            # mode == "messages": data is (chunk, metadata)
+            chunk, metadata = data
             node = metadata.get("langgraph_node", "")
 
             # ── Accumulate chunks by id for history ───────────────────────────
@@ -161,7 +181,7 @@ async def run_turn(history: list, user_input: str) -> list:
                     accumulated[cid] = chunk
 
             # ── Display logic ─────────────────────────────────────────────────
-            if node == "agent":
+            if node in _LLM_NODES:
                 tool_calls = getattr(chunk, "tool_calls", None) or (
                     getattr(chunk, "additional_kwargs", {}).get("tool_calls")
                 )
@@ -169,9 +189,8 @@ async def run_turn(history: list, user_input: str) -> list:
                 has_content = bool(getattr(chunk, "content", ""))
 
                 if has_tool_calls and not has_content:
-                    # LLM decided to call a tool — show query inside the spinner
+                    # LLM decided to call a tool — show what it's fetching
                     tc_list = tool_calls if isinstance(tool_calls, list) else []
-                    spin_msg = "Searching…"
                     for tc in tc_list:
                         args = (
                             tc.get("args", {})
@@ -180,9 +199,11 @@ async def run_turn(history: list, user_input: str) -> list:
                         )
                         query_val = next(iter(args.values()), None) if args else None
                         if query_val:
-                            spin_msg = f'Searching for "{query_val}"'
-                        break  # use the first tool call's query
-                    await spinner.swap(spin_msg)
+                            if node == "retriever":
+                                await spinner.swap(f'Fetching "{query_val}"…')
+                            else:
+                                await spinner.swap(f'Searching for "{query_val}"…')
+                        break
                     first_ai_token = True
                     parser = _ThinkParser()
 
@@ -201,7 +222,7 @@ async def run_turn(history: list, user_input: str) -> list:
                             sys.stdout.write(f"{color}{seg}{Style.RESET_ALL}")
                             sys.stdout.flush()
 
-            elif node == "tools":
+            elif node in _TOOL_NODES:
                 await spinner.stop()
                 content = getattr(chunk, "content", "")
                 if content:
@@ -209,7 +230,10 @@ async def run_turn(history: list, user_input: str) -> list:
                     if len(str(content)) > 240:
                         preview += "…"
                     print(f"\n{TOOL_RESULT_COLOR}   ↳ {preview}{Style.RESET_ALL}")
-                await spinner.swap("Processing results…")
+                if node == "retriever_tool":
+                    await spinner.swap("Analysing document…")
+                else:
+                    await spinner.swap("Processing results…")
                 first_ai_token = True
                 parser = _ThinkParser()
 
@@ -228,9 +252,20 @@ async def chat_loop():
     init(autoreset=False)
 
     print(f"\n{SYSTEM_COLOR}{'─' * 52}")
-    print(f"  cl-ai-chat  │  new session (no history persisted)")
+    print(f"  cl-ai-chat  |  new session (no history persisted)")
     print(f"  type 'exit', 'quit', or 'bye' to end")
     print(f"{'─' * 52}{Style.RESET_ALL}\n")
+
+    file_id = get_file_ids()
+
+    if file_id:
+        print(
+            f"{SYSTEM_COLOR}  Document session active  |  file_id: {file_id}{Style.RESET_ALL}\n"
+        )
+    else:
+        print(
+            f"{SYSTEM_COLOR}  No document attached  |  general chat mode{Style.RESET_ALL}\n"
+        )
 
     conversation_history: list = []
 
@@ -246,7 +281,7 @@ async def chat_loop():
         if not user_input:
             continue
         if user_input.lower() in {"exit", "quit", "bye"}:
-            print(f"{SYSTEM_COLOR}Goodbye!{Style.RESET_ALL}")
+            print(f"🤖 {SYSTEM_COLOR}Goodbye!{Style.RESET_ALL}")
             break
         if user_input.lower() in {"thank you", "thanks", "thank you!", "thanks!"}:
             print(f"{SYSTEM_COLOR}You're welcome!{Style.RESET_ALL}")
@@ -256,7 +291,9 @@ async def chat_loop():
         conversation_history = await maybe_summarize(conversation_history)
 
         try:
-            conversation_history = await run_turn(conversation_history, user_input)
+            conversation_history = await run_turn(
+                conversation_history, user_input, file_id
+            )
         except Exception as exc:
             print(f"\n{ERROR_COLOR}Error: {exc}{Style.RESET_ALL}\n")
 
